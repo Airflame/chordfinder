@@ -140,3 +140,7 @@ BTC by Jonggwon Park ([paper](https://arxiv.org/abs/1907.02698)), S-KEY by Deeze
 ([paper](https://arxiv.org/abs/2501.12907)) with ConvNeXt blocks by Meta FAIR. Beat This! by the
 Institute of Computational Perception, JKU Linz ([paper](https://arxiv.org/abs/2407.21658)) is used as a
 library. The model weights are downloaded from the authors' own repositories.
+
+## LLMs used for development
+
+- Claude Opus 5.5
