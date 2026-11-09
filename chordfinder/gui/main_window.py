@@ -7,12 +7,12 @@ import shutil
 import subprocess
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt, QThread, QTimer, QUrl, Signal
+from PySide6.QtCore import QElapsedTimer, QSettings, Qt, QThread, QTimer, QUrl, Signal
 from PySide6.QtGui import QAction, QBrush, QDragEnterEvent, QDropEvent, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QSlider, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .chord_view import FAMILY_COLORS, ChordDisplay, ChordTimeline, build_items
@@ -44,6 +44,25 @@ class FunctionThread(QThread):
             self.finished_ok.emit(self.fn())
         except Exception as e:
             self.failed.emit(str(e) or type(e).__name__)
+
+
+class SeekSlider(QSlider):
+    """A slider that jumps to where the groove is clicked (instead of paging) and can be dragged on from there."""
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton and self.maximum() > self.minimum():
+            opt = QStyleOptionSlider()
+            self.initStyleOption(opt)
+            handle = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderHandle, self)
+            if not handle.contains(event.position().toPoint()):
+                groove = self.style().subControlRect(QStyle.CC_Slider, opt, QStyle.SC_SliderGroove, self)
+                x = event.position().x() - groove.left() - handle.width() / 2
+                span = groove.width() - handle.width()
+                value = QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), int(x), max(1, span),
+                                                       opt.upsideDown)
+                self.setSliderPosition(value)  # triggers SliderMove -> actionTriggered -> seek
+        # The handle is now under the cursor, so the default handling starts a drag from here.
+        super().mousePressEvent(event)
 
 
 def _probe_gpu() -> str | None:
@@ -79,9 +98,16 @@ class MainWindow(QMainWindow):
         self.current_row: int | None = None   # the song shown in the player and the Chords tab
         self._chord_row = -1                  # highlighted row in the chord list
 
+        # ~60 fps; a precise timer because Windows' coarse timers snap to ~15.6 ms slots and stutter.
         self.tick = QTimer(self)
-        self.tick.setInterval(30)
+        self.tick.setTimerType(Qt.PreciseTimer)
+        self.tick.setInterval(16)
         self.tick.timeout.connect(self._on_tick)
+        # QMediaPlayer.position() advances in coarse steps, so the display runs its own clock
+        # between them (see _display_time).
+        self._clock = QElapsedTimer()
+        self._clock_pos = 0.0         # displayed time when _clock was last restarted
+        self._last_reported = -1.0    # last raw player position seen
 
         self._build_ui()
         self._load_settings()
@@ -144,9 +170,12 @@ class MainWindow(QMainWindow):
         self.play_btn = QPushButton("▶ Play")
         self.play_btn.setMinimumWidth(90)
         self.play_btn.clicked.connect(self._toggle_play)
-        self.seek = QSlider(Qt.Horizontal)
+        self.seek = SeekSlider(Qt.Horizontal)
         self.seek.setRange(0, 0)
-        self.seek.sliderMoved.connect(self._seek_ms)
+        self.seek.setSingleStep(5000)   # arrow keys / wheel: 5 s
+        self.seek.setPageStep(10000)    # Page Up/Down: 10 s
+        # Any user action (click, drag, keys, wheel) seeks; sliderPosition already holds the new value here.
+        self.seek.actionTriggered.connect(lambda _action: self._seek_ms(self.seek.sliderPosition()))
         self.time_label = QLabel("0:00 / 0:00")
         self.volume = QSlider(Qt.Horizontal)
         self.volume.setRange(0, 100)
@@ -791,11 +820,31 @@ class MainWindow(QMainWindow):
             self.tick.stop()
             self._on_tick(force=True)
 
+    def _display_time(self, force: bool) -> float:
+        """Playback position in seconds, extrapolated smoothly between the player's coarse updates."""
+        from PySide6.QtMultimedia import QMediaPlayer
+        reported = self.player.position() / 1000
+        playing = self.player.playbackState() == QMediaPlayer.PlayingState
+        if force or not playing or not self._clock.isValid():
+            t = reported
+        else:
+            t = self._clock_pos + self._clock.elapsed() / 1000 * self.player.playbackRate()
+            error = reported - t
+            if abs(error) > 0.25:      # seek, buffering stall, etc.: jump to the real position
+                t = reported
+            elif reported != self._last_reported:
+                # Drift gently toward each fresh report, but never backwards (that reads as a judder).
+                t = max(self._clock_pos, t + error * 0.2)
+        self._last_reported = reported
+        self._clock_pos = t
+        self._clock.start()
+        return t
+
     def _on_tick(self, force: bool = False) -> None:
-        """Move the chord display along with the playback position (~30 times a second)."""
+        """Move the chord display along with the playback position (~60 times a second)."""
         if self.player is None or self.current_row is None:
             return
-        t = self.player.position() / 1000
+        t = self._display_time(force)
         self.chord_display.set_time(t)
         self.timeline.set_time(t)
         starts = getattr(self, "_chord_starts", [])

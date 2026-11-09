@@ -5,6 +5,7 @@ from __future__ import annotations
 import bisect
 from dataclasses import dataclass
 
+import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPalette, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
@@ -85,6 +86,9 @@ class _Base(QWidget):
         self.starts: list[float] = []
         self.beats: list[float] = []
         self.downbeats: list[float] = []
+        self._beats_arr = np.zeros(0)
+        self._downbeats_arr = np.zeros(0)
+        self._down_set: set[float] = set()
         self.meter = 4
         self.time = 0.0
         self.show_functions = True
@@ -94,8 +98,12 @@ class _Base(QWidget):
                  message: str = "") -> None:
         self.items = items
         self.starts = [it.start for it in items]
-        self.beats = list(beats)
-        self.downbeats = list(downbeats)
+        self.beats = [float(b) for b in beats]
+        self.downbeats = [float(d) for d in downbeats]
+        # Cached for the per-frame paint code.
+        self._beats_arr = np.asarray(self.beats, dtype=float)
+        self._downbeats_arr = np.asarray(self.downbeats, dtype=float)
+        self._down_set = {round(d, 3) for d in self.downbeats}
         self.meter = meter or 4
         self.message = message
         self.update()
@@ -144,9 +152,14 @@ class ChordDisplay(_Base):
 
         i = self.index_at(self.time)
         current = self.items[i] if i >= 0 else None
-        nxt = self.items[i + 1] if 0 <= i + 1 < len(self.items) else (self.items[0] if i < 0 else None)
-        while nxt is not None and nxt.family == NONE and nxt is not self.items[-1]:
-            nxt = self.items[self.items.index(nxt) + 1]  # skip silences when showing what comes next
+        if i < 0:  # between chords: the next one is the first that starts later
+            j = bisect.bisect_right(self.starts, self.time)
+        else:
+            j = i + 1
+        last = len(self.items) - 1
+        while j < last and self.items[j].family == NONE:
+            j += 1  # skip silences when showing what comes next
+        nxt = self.items[j] if j <= last else None
 
         w, h = r.width(), r.height()
         split = w * 0.62
@@ -175,7 +188,7 @@ class ChordDisplay(_Base):
                        Qt.AlignLeft | Qt.AlignTop, f"{func}  ·  {FAMILY_NAMES[current.family]}")
 
         # Beat dots and bar number
-        pos = rhythm.bar_position(self.time, self.beats, self.downbeats) if self.downbeats else None
+        pos = rhythm.bar_position(self.time, self._beats_arr, self._downbeats_arr) if self.downbeats else None
         dots_y = r.bottom() - 16
         if pos:
             bar, beat = pos
@@ -283,7 +296,7 @@ class ChordTimeline(_Base):
         small = QFont(self.font())
         small.setPointSizeF(7.5)
         p.setFont(small)
-        down = set(round(d, 3) for d in self.downbeats)
+        down = self._down_set
         lo = bisect.bisect_left(self.beats, t0)
         hi = bisect.bisect_right(self.beats, t1)
         for b in self.beats[lo:hi]:
