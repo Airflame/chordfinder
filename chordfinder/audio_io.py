@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -37,6 +39,64 @@ def load_mono(path: Path, sample_rate: int, max_seconds: float | None = None) ->
             chunks.append(out.to_ndarray().reshape(-1))
     audio = np.concatenate(chunks).astype(np.float32) if chunks else np.zeros(0, np.float32)
     return audio[:limit] if limit else audio
+
+
+@dataclass
+class SongTags:
+    """What a file's tags say about the song; empty strings where a tag is missing."""
+    title: str = ""
+    artist: str = ""
+    album: str = ""
+    year: str = ""
+    cover: bytes | None = None   # embedded cover art, as encoded image data (JPEG/PNG)
+
+
+_YEAR = re.compile(r"\b(\d{4})\b")
+
+
+def _first(tags: dict[str, str], *names: str) -> str:
+    for name in names:
+        value = tags.get(name, "").strip()
+        if value:
+            return value
+    return ""
+
+
+def read_tags(path: Path) -> SongTags:
+    """Title, artist, album, year and cover art from a file's tags (via PyAV's bundled FFmpeg).
+
+    Never raises: an unreadable file just gives empty tags.
+    """
+    import av
+
+    try:
+        with av.open(str(path)) as container:
+            # FFmpeg puts tags on the container (MP3, MP4) or on the audio stream (Ogg, Opus).
+            tags: dict[str, str] = {}
+            for stream in container.streams:
+                tags.update({k.lower(): v for k, v in stream.metadata.items()})
+            tags.update({k.lower(): v for k, v in container.metadata.items()})
+
+            cover = None
+            for stream in container.streams.video:
+                if stream.disposition & av.stream.Disposition.attached_pic:
+                    for packet in container.demux(stream):
+                        if packet.size:
+                            cover = bytes(packet)
+                            break
+                    break
+    except Exception:
+        return SongTags()
+
+    date = _first(tags, "date", "year", "originaldate", "original_date", "tdrc", "tyer")
+    year = _YEAR.search(date)
+    return SongTags(
+        title=_first(tags, "title"),
+        artist=_first(tags, "artist", "album_artist", "albumartist", "performer", "composer"),
+        album=_first(tags, "album"),
+        year=year.group(1) if year else "",
+        cover=cover,
+    )
 
 
 def peak_normalize(audio: np.ndarray) -> np.ndarray:

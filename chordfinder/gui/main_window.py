@@ -8,7 +8,7 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QSettings, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, QIcon, QKeySequence, QPixmap
+from PySide6.QtGui import QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, QIcon, QImage, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
@@ -29,6 +29,7 @@ PATH_ROLE = Qt.UserRole
 RESULT_ROLE = Qt.UserRole + 1
 KEY_ROLE = Qt.UserRole + 2        # the user's key override for this song (Key.index or None)
 ICON_PATH = Path(__file__).resolve().parent.parent / "resources" / "icon.png"
+COVER_SIZE = 72   # album art in the player, in pixels
 # Chord-function families whose colours the user can change (shown as the legend).
 LEGEND_FAMILIES = (TONIC, SUBDOMINANT, DOMINANT, SECONDARY, CHROMATIC)
 
@@ -102,6 +103,7 @@ class MainWindow(QMainWindow):
         self.player = None  # created lazily; QtMultimedia loads FFmpeg on first use
         self.current_row: int | None = None   # the song shown in the player and the Chords tab
         self._chord_row = -1                  # highlighted row in the chord list
+        self._tags: dict[Path, audio_io.SongTags] = {}   # tags read so far, by file
 
         # ~60 fps; a precise timer because Windows' coarse timers snap to ~15.6 ms slots and stutter.
         self.tick = QTimer(self)
@@ -194,13 +196,37 @@ class MainWindow(QMainWindow):
         player_row.addWidget(self.time_label)
         player_row.addWidget(QLabel("Volume"))
         player_row.addWidget(self.volume)
-        self.now_playing = QLabel("")
-        self.now_playing.setMinimumWidth(10)
+        # Now playing: album art, title, artist · album · year.
+        self.cover_label = QLabel()
+        self.cover_label.setFixedSize(COVER_SIZE, COVER_SIZE)
+        self.cover_label.setAlignment(Qt.AlignCenter)
+        self.cover_label.setStyleSheet("background: palette(base); border-radius: 4px; color: palette(mid);"
+                                       "font-size: 28px;")
+        self.title_label = QLabel("")
+        self.title_label.setMinimumWidth(10)
+        font = self.title_label.font()
+        font.setPointSizeF(font.pointSizeF() + 2)
+        font.setBold(True)
+        self.title_label.setFont(font)
+        self.title_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.details_label = QLabel("")
+        self.details_label.setMinimumWidth(10)
+        self.details_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
         self.summary_label = QLabel("")
         self.summary_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        # Every line keeps its height when empty, so the player doesn't resize as songs change.
+        for label in (self.title_label, self.details_label, self.summary_label):
+            label.setMinimumHeight(label.fontMetrics().height())
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        text_col.addStretch(1)
+        text_col.addWidget(self.title_label)
+        text_col.addWidget(self.details_label)
+        text_col.addWidget(self.summary_label)
+        text_col.addStretch(1)
         info_row = QHBoxLayout()
-        info_row.addWidget(self.now_playing, 1)
-        info_row.addWidget(self.summary_label)
+        info_row.addWidget(self.cover_label)
+        info_row.addLayout(text_col, 1)
 
         player_box = QGroupBox("Player")
         pv = QVBoxLayout(player_box)
@@ -707,10 +733,7 @@ class MainWindow(QMainWindow):
             self._unload_player()
         self.current_row = row
         r = self._result(row)
-        if row is None:
-            self.now_playing.setText("")
-        else:
-            self.now_playing.setText(self._path(row).name)
+        self._show_song_info(row)
         if r is None:
             msg = ("Add songs and click Analyze songs." if row is None
                    else "This song hasn't been analysed yet. Click Analyze songs.")
@@ -787,6 +810,37 @@ class MainWindow(QMainWindow):
         if start is not None:
             self._seek_seconds(float(start))
             self._play()
+
+    def _song_tags(self, path: Path) -> audio_io.SongTags:
+        if path not in self._tags:
+            self._tags[path] = audio_io.read_tags(path)
+        return self._tags[path]
+
+    def _show_song_info(self, row: int | None) -> None:
+        """Title, artist, album, year and album art of the player's song."""
+        if row is None:
+            self.title_label.setText("")
+            self.details_label.setText("")
+            self.title_label.setToolTip("")
+            self.cover_label.clear()
+            return
+        path = self._path(row)
+        tags = self._song_tags(path)
+        title = tags.title or path.stem
+        self.title_label.setText(title)
+        self.title_label.setToolTip(str(path))
+        details = " · ".join(x for x in (tags.artist, tags.album, tags.year) if x)
+        self.details_label.setText(details)
+        cover = QImage.fromData(tags.cover) if tags.cover else QImage()
+        if cover.isNull():
+            self.cover_label.setPixmap(QPixmap())
+            self.cover_label.setText("♪")
+        else:
+            dpr = self.devicePixelRatioF()
+            pix = QPixmap.fromImage(cover.scaled(int(COVER_SIZE * dpr), int(COVER_SIZE * dpr),
+                                                 Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            pix.setDevicePixelRatio(dpr)
+            self.cover_label.setPixmap(pix)
 
     # -------------------------------------------------------------- player
     def _ensure_player(self):
