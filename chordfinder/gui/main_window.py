@@ -8,14 +8,17 @@ import subprocess
 from pathlib import Path
 
 from PySide6.QtCore import QElapsedTimer, QSettings, Qt, QThread, QTimer, QUrl, Signal
-from PySide6.QtGui import QAction, QBrush, QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtGui import QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, QIcon, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGroupBox,
+    QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSlider, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QSizePolicy, QSlider, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
-from .chord_view import FAMILY_COLORS, ChordDisplay, ChordTimeline, build_items
+from .chord_view import (
+    CHROMATIC, DEFAULT_FAMILY_COLORS, DOMINANT, FAMILY_COLORS, FAMILY_NAMES, SECONDARY, SUBDOMINANT, TONIC,
+    ChordDisplay, ChordTimeline, build_items,
+)
 from .worker import Worker
 from .. import audio_io, model_store, models, rhythm
 from ..analyzer import Analysis, Pipeline, Settings, chart_path, default_cache_dir, default_models_dir, load_cached
@@ -26,6 +29,8 @@ PATH_ROLE = Qt.UserRole
 RESULT_ROLE = Qt.UserRole + 1
 KEY_ROLE = Qt.UserRole + 2        # the user's key override for this song (Key.index or None)
 ICON_PATH = Path(__file__).resolve().parent.parent / "resources" / "icon.png"
+# Chord-function families whose colours the user can change (shown as the legend).
+LEGEND_FAMILIES = (TONIC, SUBDOMINANT, DOMINANT, SECONDARY, CHROMATIC)
 
 
 class FunctionThread(QThread):
@@ -315,13 +320,53 @@ class MainWindow(QMainWindow):
         self.chord_table.doubleClicked.connect(self._on_chord_double_click)
         v.addWidget(self.chord_table, 1)
 
-        legend = QLabel(" ".join(
-            f"<span style='color:{FAMILY_COLORS[f].name()}'>■</span> {name}"
-            for f, name in ((0, "tonic"), (1, "subdominant"), (2, "dominant"), (3, "secondary"),
-                            (4, "borrowed/chromatic"))))
-        legend.setWordWrap(True)
-        v.addWidget(legend)
+        # The legend doubles as the colour picker: click a swatch to change that function's colour.
+        # A two-column grid, so the full names fit in the narrow side panel.
+        legend = QGridLayout()
+        legend.setHorizontalSpacing(6)
+        legend.setVerticalSpacing(4)
+        self.color_buttons: dict[int, QPushButton] = {}
+        buttons = []
+        for f in LEGEND_FAMILIES:
+            btn = QPushButton(FAMILY_NAMES[f])
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.setToolTip(f"Click to change the colour for {FAMILY_NAMES[f]} chords.")
+            btn.clicked.connect(lambda _=False, f=f: self._pick_family_color(f))
+            self.color_buttons[f] = btn
+            buttons.append(btn)
+        reset = QPushButton("Reset colours")
+        reset.setToolTip("Restore the default chord-function colours.")
+        reset.clicked.connect(self._reset_family_colors)
+        buttons.append(reset)
+        for i, btn in enumerate(buttons):
+            btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            legend.addWidget(btn, i // 2, i % 2)
+        v.addLayout(legend)
         return w
+
+    # ------------------------------------------------------- function colours
+    def _update_color_buttons(self) -> None:
+        size = self.fontMetrics().height()
+        for f, btn in self.color_buttons.items():
+            pix = QPixmap(size, size)
+            pix.fill(FAMILY_COLORS[f])
+            btn.setIcon(QIcon(pix))
+
+    def _set_family_color(self, family: int, color: QColor) -> None:
+        FAMILY_COLORS[family] = QColor(color)
+        self._update_color_buttons()
+        self._refresh_song_view()
+
+    def _pick_family_color(self, family: int) -> None:
+        color = QColorDialog.getColor(FAMILY_COLORS[family], self, f"Colour for {FAMILY_NAMES[family]} chords")
+        if color.isValid():
+            self._set_family_color(family, color)
+
+    def _reset_family_colors(self) -> None:
+        for f in LEGEND_FAMILIES:
+            FAMILY_COLORS[f] = QColor(DEFAULT_FAMILY_COLORS[f])
+        self._update_color_buttons()
+        self._refresh_song_view()
 
     def _analysis_tab(self) -> QWidget:
         w = QWidget()
@@ -436,6 +481,10 @@ class MainWindow(QMainWindow):
         self.show_functions_chk.setChecked(q.value("show_functions", True, bool))
         self.simplify_chk.setChecked(q.value("simplify", False, bool))
         self.volume.setValue(q.value("volume", 80, int))
+        for f in LEGEND_FAMILIES:
+            color = QColor(q.value(f"colors/{FAMILY_NAMES[f]}", DEFAULT_FAMILY_COLORS[f].name()))
+            FAMILY_COLORS[f] = color if color.isValid() else QColor(DEFAULT_FAMILY_COLORS[f])
+        self._update_color_buttons()
         geometry = q.value("geometry")
         if geometry is not None:
             self.restoreGeometry(geometry)
@@ -456,6 +505,8 @@ class MainWindow(QMainWindow):
         q.setValue("show_functions", self.show_functions_chk.isChecked())
         q.setValue("simplify", self.simplify_chk.isChecked())
         q.setValue("volume", self.volume.value())
+        for f in LEGEND_FAMILIES:
+            q.setValue(f"colors/{FAMILY_NAMES[f]}", FAMILY_COLORS[f].name())
         q.setValue("geometry", self.saveGeometry())
 
     def _models_dir(self) -> Path:

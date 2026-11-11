@@ -15,7 +15,7 @@ from ..theory import Chord, Key
 
 # Function families and their colours.
 TONIC, SUBDOMINANT, DOMINANT, SECONDARY, CHROMATIC, NONE = range(6)
-FAMILY_COLORS = {
+DEFAULT_FAMILY_COLORS = {
     TONIC: QColor("#27AE60"),
     SUBDOMINANT: QColor("#F1C40F"),
     DOMINANT: QColor("#E74C3C"),
@@ -23,6 +23,8 @@ FAMILY_COLORS = {
     CHROMATIC: QColor("#2980B9"),
     NONE: QColor("#8A9099"),
 }
+# The colours in use. The user can change them, so widgets look them up at paint time.
+FAMILY_COLORS = {f: QColor(c) for f, c in DEFAULT_FAMILY_COLORS.items()}
 FAMILY_NAMES = {TONIC: "tonic", SUBDOMINANT: "subdominant", DOMINANT: "dominant",
                 SECONDARY: "secondary dominant", CHROMATIC: "borrowed / chromatic", NONE: "no chord"}
 _DEGREE_FAMILY = {"I": TONIC, "III": TONIC, "VI": TONIC, "II": SUBDOMINANT, "IV": SUBDOMINANT,
