@@ -16,11 +16,11 @@ from ..theory import Chord, Key
 # Function families and their colours.
 TONIC, SUBDOMINANT, DOMINANT, SECONDARY, CHROMATIC, NONE = range(6)
 FAMILY_COLORS = {
-    TONIC: QColor("#4F8EF7"),
-    SUBDOMINANT: QColor("#2FB37E"),
-    DOMINANT: QColor("#EE8A3C"),
-    SECONDARY: QColor("#A866DD"),
-    CHROMATIC: QColor("#D9547F"),
+    TONIC: QColor("#27AE60"),
+    SUBDOMINANT: QColor("#F1C40F"),
+    DOMINANT: QColor("#E74C3C"),
+    SECONDARY: QColor("#D35400"),
+    CHROMATIC: QColor("#2980B9"),
     NONE: QColor("#8A9099"),
 }
 FAMILY_NAMES = {TONIC: "tonic", SUBDOMINANT: "subdominant", DOMINANT: "dominant",
