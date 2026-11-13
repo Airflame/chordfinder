@@ -63,7 +63,7 @@ Shortcuts: Ctrl+Space play/pause, Ctrl+Left / Ctrl+Right skip 5 s, Ctrl+O add so
 | Result | Details |
 |---|---|
 | BPM | the main beat level. `128 BPM` for a steady tempo; `≈96 BPM (88–104)` when the tempo drifts (live recordings, rubato). Passages a tracker hears in double or half time are folded back onto the main beat |
-| Meter | beats per bar from the downbeats, e.g. `4/4` or `3/4` (6/8 is shown as 3/4 or 6/4 depending on the felt beat) |
+| Meter | beats per bar from the downbeats, e.g. `4/4`, `3/4`, or uncommon ones such as `5/4` and `7/4` (always written over 4: 7/8 counted in eighths reads `7/4`, and 6/8 is shown as 3/4 or 6/4 depending on the felt beat). A song that changes meter shows both, e.g. `7/4 and 4/4`. The player shows one dot per beat of the current bar and marks meter changes on the timeline |
 | Key | e.g. `Eb major · 5B`, with the model's confidence and the runner-up keys. Relative keys (C major / A minor) share a Camelot number |
 | Tuning | `A = 440.0 Hz (standard)`, or e.g. `A = 432.0 Hz (−32 ¢)`. A recording tuned more than half a semitone away (such as a guitar tuned down to Eb) is indistinguishable from a song in another key at A = 440, so it shows up as that key |
 | Function | Roman numerals relative to the **major scale of the tonic** in both modes, the usual convention in pop and jazz analysis: in A minor, F is **bVI** and G is **bVII**. Upper case = major, lower case = minor, ° diminished, ø half-diminished, + augmented |
@@ -82,6 +82,7 @@ Shortcuts: Ctrl+Space play/pause, Ctrl+Left / Ctrl+Right skip 5 s, Ctrl+O add so
 |---|---|
 | Align chord changes to the beat | moves each chord change onto the nearest beat when it's close to one. Gives a tidier chart; turn it off for rubato music |
 | Shortest chord | chords shorter than this (default 0.4 s) are merged into a neighbour. Raise it for a simpler chart; 0 keeps every chord the model hears |
+| Longest bar | the longest bar, in beats, the meter detection may find (default 12, so up to 12/4). Lower it if bars come out too long, e.g. to 4 when a 4/4 song is shown as 8/4; that also rules out 5/4 and 7/4 |
 | Compensate for the song's tuning | analyses chords and key relative to the measured reference pitch instead of A = 440 Hz. Leave it on |
 | Remember results | results are saved in `%LOCALAPPDATA%\Chordfinder\results`, so a song you add again appears instantly. **Forget saved results** clears them |
 | Save a chord chart next to each song | writes `<song>.chords.txt` beside the audio file |
@@ -144,3 +145,4 @@ library. The model weights are downloaded from the authors' own repositories.
 ## LLMs used for development
 
 - Claude Opus 5.5
+- Claude Fable 5.2

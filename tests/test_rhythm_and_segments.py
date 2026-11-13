@@ -42,7 +42,7 @@ def test_format_bpm():
     assert rhythm.format_bpm(127.6) == "127.6"
 
 
-@pytest.mark.parametrize("meter", [3, 4])
+@pytest.mark.parametrize("meter", [3, 4, 5, 7])
 def test_meter(meter):
     beats = beat_grid(120, 96)
     assert rhythm.meter_from_downbeats(beats, beats[::meter]) == meter
@@ -50,6 +50,84 @@ def test_meter(meter):
 
 def test_meter_unknown_without_downbeats():
     assert rhythm.meter_from_downbeats(beat_grid(120, 20), []) is None
+
+
+def test_bar_lengths_and_meter_text():
+    beats = beat_grid(120, 60)
+    downbeats = np.concatenate([beats[0:28:7], beats[28::4]])   # four bars of 7, then eight of 4
+    assert rhythm.bar_lengths(beats, downbeats) == [7] * 4 + [4] * 7
+    assert rhythm.meters(beats, downbeats) == [4, 7]
+    assert rhythm.meter_text([4, 7]) == "4/4 and 7/4" and rhythm.meter_text([5]) == "5/4"
+    assert rhythm.meter_text([]) == "–"
+
+
+def test_a_few_odd_bars_are_not_a_second_meter():
+    beats = beat_grid(120, 200)
+    downbeats = np.concatenate([beats[0:120:4], beats[123::4]])   # one bar of 3 among 4/4
+    assert rhythm.meters(beats, downbeats) == [4]
+
+
+def split_bars(groups, bars=24, strong=0.95, weak=0.7, seed=0):
+    """Beats of a song in sum(groups)/4 as a tracker hears it: every group start looks like a downbeat."""
+    rng = np.random.default_rng(seed)
+    n = sum(groups)
+    beats = beat_grid(132, bars * n)
+    strength = rng.uniform(0.0, 0.25, beats.size)
+    starts = np.cumsum([0] + list(groups))[:-1]
+    for g in starts:
+        strength[g::n] = (strong if g == 0 else weak) + rng.uniform(-0.05, 0.05, bars)
+    detected = beats[np.isin(np.arange(beats.size) % n, starts)]
+    return beats, detected, strength
+
+
+@pytest.mark.parametrize("groups", [(3, 2), (2, 3), (4, 3), (2, 2, 3), (3, 3, 2, 3)])
+def test_split_bars_of_odd_meters_are_joined(groups):
+    n = sum(groups)
+    beats, detected, strength = split_bars(groups)
+    assert rhythm.meter_from_downbeats(beats, detected) != n
+    downbeats = rhythm.regroup_downbeats(beats, detected, strength)
+    assert rhythm.meter_from_downbeats(beats, downbeats) == n
+    assert np.allclose(downbeats, beats[::n])              # and the bars start on the strongest beat
+
+
+def test_odd_meter_without_strengths():
+    beats, detected, _ = split_bars((4, 3))
+    downbeats = rhythm.regroup_downbeats(beats, detected)
+    assert rhythm.meter_from_downbeats(beats, downbeats) == 7
+
+
+def test_regroup_keeps_a_passage_in_another_meter():
+    beats = beat_grid(132, 7 * 12 + 4 * 12)
+    index = np.concatenate([np.arange(0, 84, 7), np.arange(84, 132, 4)])   # 12 bars of 7/4, 12 of 4/4
+    strength = np.full(beats.size, 0.1)
+    strength[index] = 0.95
+    strength[index[:12] + 4] = 0.7                                           # the 7/4 bars are heard as 4 + 3
+    detected = beats[np.sort(np.concatenate([index, index[:12] + 4]))]
+    downbeats = rhythm.regroup_downbeats(beats, detected, strength)
+    assert np.allclose(downbeats, beats[index])
+    assert rhythm.meters(beats, downbeats) == [7, 4]
+
+
+def test_max_meter_limits_the_bar_length():
+    beats, detected, strength = split_bars((4, 3))
+    downbeats = rhythm.regroup_downbeats(beats, detected, strength, max_meter=4)
+    assert max(rhythm.bar_lengths(beats, downbeats)) <= 4
+    # Regular bars that are too long are split on the strongest beats.
+    beats = beat_grid(120, 160)
+    strength = np.full(beats.size, 0.1)
+    strength[::4] = 0.8
+    downbeats = rhythm.regroup_downbeats(beats, beats[::8], strength, max_meter=4)
+    assert rhythm.meter_from_downbeats(beats, downbeats, 4) == 4 and np.allclose(downbeats[:5], beats[:20:4])
+    assert rhythm.meters(beats, beats[::8], max_meter=4) == []
+
+
+def test_regroup_leaves_regular_songs_alone():
+    beats = beat_grid(120, 200)
+    downbeats = np.delete(beats[::4], [10, 30])            # two missed downbeats
+    assert rhythm.regroup_downbeats(beats, downbeats) is not None
+    assert np.array_equal(rhythm.regroup_downbeats(beats, downbeats), downbeats)
+    assert rhythm.regroup_downbeats(beats, []).size == 0
+    assert rhythm.regroup_downbeats([], []).size == 0
 
 
 def test_bar_position():

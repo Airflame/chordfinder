@@ -21,6 +21,9 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument("--key-model", default=models.DEFAULTS[models.KEY],
                    choices=[m.id for m in models.for_task(models.KEY)])
     p.add_argument("--min-chord", type=float, default=0.4, help="shortest chord in seconds")
+    p.add_argument("--max-meter", type=int, default=rhythm.MAX_METER, choices=range(2, rhythm.MAX_BAR + 1),
+                   metavar=f"2-{rhythm.MAX_BAR}",
+                   help="longest bar in beats (default %(default)s; 4 allows common meters only)")
     p.add_argument("--no-snap", action="store_true", help="don't move chord changes onto beats")
     p.add_argument("--no-chords", action="store_true", help="print only the summary line")
     p.add_argument("--no-functions", action="store_true", help="omit Roman numerals")
@@ -35,7 +38,7 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
 
     s = Settings(chord_model=a.chord_model, beat_model=a.beat_model, key_model=a.key_model,
-                 min_chord_seconds=a.min_chord, snap_to_beats=not a.no_snap, use_cache=not a.no_cache,
+                 min_chord_seconds=a.min_chord, max_meter=a.max_meter, snap_to_beats=not a.no_snap, use_cache=not a.no_cache,
                  save_chart=a.chart, device="cpu" if a.cpu else "cuda", allow_download=not a.offline)
 
     def progress(f: float, stage: str) -> None:

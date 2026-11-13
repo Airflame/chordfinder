@@ -92,6 +92,8 @@ class _Base(QWidget):
         self._downbeats_arr = np.zeros(0)
         self._down_set: set[float] = set()
         self.meter = 4
+        self._bar_lengths: list[int] = []          # beats in each bar
+        self._meter_changes: dict[int, int] = {}   # bar number -> beats per bar from there on
         self.time = 0.0
         self.show_functions = True
         self.message = "Analyse a song and play it to see its chords here."
@@ -107,8 +109,31 @@ class _Base(QWidget):
         self._downbeats_arr = np.asarray(self.downbeats, dtype=float)
         self._down_set = {round(d, 3) for d in self.downbeats}
         self.meter = meter or 4
+        self._bar_lengths = rhythm.bar_lengths(self.beats, self.downbeats)
+        self._meter_changes = self._find_meter_changes()
         self.message = message
         self.update()
+
+    def _find_meter_changes(self) -> dict[int, int]:
+        """Bars where the meter changes. A new meter has to last two bars, so a single
+        miscounted bar is not announced as a change."""
+        changes: dict[int, int] = {}
+        current = self.meter
+        lengths = self._bar_lengths
+        for i, n in enumerate(lengths):
+            if n != current and 2 <= n <= rhythm.MAX_BAR and i + 1 < len(lengths) and lengths[i + 1] == n:
+                changes[i + 1] = current = n
+        return changes
+
+    def beats_in_bar(self, bar: int) -> int:
+        """Beats in a bar (1-based number); the song's meter where the bar can't be counted."""
+        if 1 <= bar <= len(self._bar_lengths) and 2 <= self._bar_lengths[bar - 1] <= rhythm.MAX_BAR:
+            return self._bar_lengths[bar - 1]
+        meter = self.meter
+        for start, n in self._meter_changes.items():   # in bar order
+            if start <= bar:
+                meter = n
+        return meter
 
     def set_time(self, t: float) -> None:
         self.time = t
@@ -200,13 +225,18 @@ class ChordDisplay(_Base):
             p.setPen(mid)
             label = f"Bar {bar}" if bar > 0 else "Pickup"
             p.drawText(QRectF(r.left() + 28, dots_y - 8, 60, 16), Qt.AlignLeft | Qt.AlignVCenter, label)
-            for k in range(self.meter):
+            # One dot per beat of this bar, so 5/4 shows five and a bar in another meter its own count.
+            count = max(self.beats_in_bar(bar), beat) if bar > 0 else max(self.meter, beat)
+            first_x = r.left() + 96
+            step = min(18.0, (r.left() + split - 14 - first_x) / max(1, count - 1))
+            scale = min(1.0, max(0.45, step / 12.0))   # long bars in a narrow window: smaller dots
+            for k in range(count):
                 on = k + 1 == beat
                 color = accent if on else _mix(bg, fg, 0.2)
                 p.setBrush(color)
                 p.setPen(Qt.NoPen)
-                radius = 5.5 if k == 0 else 4.5
-                p.drawEllipse(QPointF(r.left() + 96 + k * 18, dots_y), radius, radius)
+                radius = (5.5 if k == 0 else 4.5) * scale
+                p.drawEllipse(QPointF(first_x + k * step, dots_y), radius, radius)
 
         # Divider and the next chord
         p.setPen(QPen(_mix(bg, fg, 0.15), 1))
@@ -309,7 +339,9 @@ class ChordTimeline(_Base):
             if is_down:
                 bar = bisect.bisect_right(self.downbeats, b + 0.001)
                 p.setPen(mid)
-                p.drawText(QRectF(x + 3, r.top() + 2, 40, 14), Qt.AlignLeft | Qt.AlignVCenter, str(bar))
+                change = self._meter_changes.get(bar)
+                label = f"{bar} · {change}/4" if change else str(bar)
+                p.drawText(QRectF(x + 3, r.top() + 2, 70, 14), Qt.AlignLeft | Qt.AlignVCenter, label)
 
         # Chord blocks
         first = max(0, bisect.bisect_right(self.starts, t0) - 1)

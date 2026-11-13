@@ -47,6 +47,7 @@ class Settings:
     snap_to_beats: bool = True        # move chord changes onto the nearest beat
     min_chord_seconds: float = 0.4    # shorter chords are merged into a neighbour
     tuning_correction: bool = True    # retune the analysis to the song's reference pitch
+    max_meter: int = rhythm.MAX_METER  # longest bar in beats: 12 allows up to 12/4, 4 only common meters
 
     use_cache: bool = True            # reuse earlier results for unchanged files
     save_chart: bool = False          # write <song>.chords.txt next to the song
@@ -116,7 +117,11 @@ class Analysis:
 
     @property
     def meter_text(self) -> str:
-        return f"{self.meter}/4" if self.meter else "–"
+        """"4/4", "7/4", or "7/4 and 4/4" when a second meter makes up a real part of the song."""
+        if not self.meter:
+            return "–"
+        limit = self.options.get("max_meter", rhythm.MAX_METER)
+        return rhythm.meter_text(rhythm.meters(self.beats, self.downbeats, limit) or [self.meter])
 
     def to_json(self) -> str:
         return json.dumps(asdict(self), ensure_ascii=False, indent=1)
@@ -160,6 +165,8 @@ def cache_key(path: Path, s: Settings) -> str:
     ident = json.dumps([str(path.resolve()).lower(), st.st_size, int(st.st_mtime), s.chord_model, s.beat_model,
                         s.key_model, s.snap_to_beats, round(s.min_chord_seconds, 3), s.tuning_correction,
                         RESULT_VERSION])
+    if s.max_meter != rhythm.MAX_METER:   # only when changed, so results from before the option stay valid
+        ident += f"|max_meter={s.max_meter}"
     return hashlib.sha1(ident.encode()).hexdigest()
 
 
@@ -252,9 +259,19 @@ class BeatThisBackend:
         self.tracker = Audio2Beats(checkpoint_path=str(model_store.file_path(models_dir, spec)), device=dev,
                                    float16=dev == "cuda")
 
-    def track(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        beats, downbeats = self.tracker(y.astype(np.float64), SAMPLE_RATE)
-        return np.asarray(beats, float), np.asarray(downbeats, float)
+    def track(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Beat times, downbeat times and, for each beat, how likely it is a downbeat (0…1)."""
+        from beat_this.inference import Audio2Frames
+        beat_logits, downbeat_logits = Audio2Frames.__call__(self.tracker, y.astype(np.float64), SAMPLE_RATE)
+        beats, downbeats = self.tracker.frames2beats(beat_logits, downbeat_logits)
+        beats, downbeats = np.asarray(beats, float), np.asarray(downbeats, float)
+        prob = 1.0 / (1.0 + np.exp(-downbeat_logits.float().cpu().numpy().astype(np.float64)))
+        fps = self.tracker.frames2beats.fps
+        strength = np.zeros(len(beats))
+        for i, frame in enumerate(np.round(beats * fps).astype(int)):
+            near = prob[max(0, frame - 3):frame + 4]   # the peak may sit a few frames off the beat
+            strength[i] = near.max() if near.size else 0.0
+        return beats, downbeats, strength
 
     def close(self) -> None:
         del self.tracker
@@ -264,10 +281,10 @@ class LibrosaBeatBackend:
     def __init__(self, spec: ModelSpec, models_dir: Path, device: str):
         pass
 
-    def track(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    def track(self, y: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
         import librosa
         _, frames = librosa.beat.beat_track(y=y, sr=SAMPLE_RATE, hop_length=512, units="frames")
-        return librosa.frames_to_time(frames, sr=SAMPLE_RATE, hop_length=512), np.zeros(0)
+        return librosa.frames_to_time(frames, sr=SAMPLE_RATE, hop_length=512), np.zeros(0), np.zeros(0)
 
     def close(self) -> None:
         pass
@@ -405,9 +422,10 @@ class Pipeline:
         check()
 
         stage("Beats", 0.15, 0.4)
-        beats, downbeats = beat_backend.track(y)
+        beats, downbeats, downbeat_strength = beat_backend.track(y)
+        downbeats = rhythm.regroup_downbeats(beats, downbeats, downbeat_strength, s.max_meter)  # 5/4, 7/4, …
         tempo = rhythm.tempo_from_beats(beats)
-        meter = rhythm.meter_from_downbeats(beats, downbeats)
+        meter = rhythm.meter_from_downbeats(beats, downbeats, s.max_meter)
         check()
 
         chord_progress = stage("Chords", 0.4, 0.85)
@@ -439,7 +457,7 @@ class Pipeline:
             chords=[(round(st, 3), round(en, 3), lab) for st, en, lab in chords],
             models={spec.task: spec.id for spec in s.specs()},
             options={"snap_to_beats": s.snap_to_beats, "min_chord_seconds": s.min_chord_seconds,
-                     "tuning_correction": s.tuning_correction},
+                     "tuning_correction": s.tuning_correction, "max_meter": s.max_meter},
             elapsed=round(time.perf_counter() - started, 2),
         )
         cb.progress(1.0, "Done")

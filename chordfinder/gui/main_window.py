@@ -12,7 +12,7 @@ from PySide6.QtGui import QAction, QBrush, QColor, QDragEnterEvent, QDropEvent, 
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QColorDialog, QComboBox, QDoubleSpinBox, QFileDialog, QFormLayout, QGridLayout, QGroupBox,
     QHBoxLayout, QHeaderView, QLabel, QLineEdit, QMainWindow, QMenu, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSizePolicy, QSlider, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
+    QProgressBar, QPushButton, QSizePolicy, QSlider, QSpinBox, QStyle, QStyleOptionSlider, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout, QWidget,
 )
 
 from .chord_view import (
@@ -406,6 +406,12 @@ class MainWindow(QMainWindow):
         self.min_chord_spin.setSuffix(" s")
         self.min_chord_spin.setToolTip("Chords shorter than this are merged into a neighbour. Higher values give "
                                        "a simpler chart; 0 keeps every chord the model hears.")
+        self.max_meter_spin = QSpinBox()
+        self.max_meter_spin.setRange(2, rhythm.MAX_BAR)
+        self.max_meter_spin.setSuffix(" beats")
+        self.max_meter_spin.setToolTip("The longest bar the meter detection may find. The default of 12 allows "
+                                       "uncommon meters such as 5/4, 7/4 or 11/4. Lower it if bars come out "
+                                       "too long, e.g. to 4 when a 4/4 song is shown as 8/4.")
         self.tuning_chk = QCheckBox("Compensate for the song's tuning")
         self.tuning_chk.setToolTip("Analyse chords and key relative to the measured reference pitch "
                                    "(for example A = 432 Hz) instead of A = 440 Hz.")
@@ -421,6 +427,7 @@ class MainWindow(QMainWindow):
 
         form.addRow("", self.snap_chk)
         form.addRow("Shortest chord:", self.min_chord_spin)
+        form.addRow("Longest bar:", self.max_meter_spin)
         form.addRow("", self.tuning_chk)
         form.addRow("", self.cache_chk)
         form.addRow("", clear_cache)
@@ -498,6 +505,7 @@ class MainWindow(QMainWindow):
         set_data(self.model_combos[models.KEY], q.value("key_model", d.key_model))
         self.snap_chk.setChecked(q.value("snap_to_beats", d.snap_to_beats, bool))
         self.min_chord_spin.setValue(q.value("min_chord_seconds", d.min_chord_seconds, float))
+        self.max_meter_spin.setValue(q.value("max_meter", d.max_meter, int))
         self.tuning_chk.setChecked(q.value("tuning_correction", d.tuning_correction, bool))
         self.cache_chk.setChecked(q.value("use_cache", d.use_cache, bool))
         self.chart_chk.setChecked(q.value("save_chart", d.save_chart, bool))
@@ -522,6 +530,7 @@ class MainWindow(QMainWindow):
         q.setValue("key_model", self.model_combos[models.KEY].currentData())
         q.setValue("snap_to_beats", self.snap_chk.isChecked())
         q.setValue("min_chord_seconds", self.min_chord_spin.value())
+        q.setValue("max_meter", self.max_meter_spin.value())
         q.setValue("tuning_correction", self.tuning_chk.isChecked())
         q.setValue("use_cache", self.cache_chk.isChecked())
         q.setValue("save_chart", self.chart_chk.isChecked())
@@ -545,6 +554,7 @@ class MainWindow(QMainWindow):
             key_model=self.model_combos[models.KEY].currentData(),
             snap_to_beats=self.snap_chk.isChecked(),
             min_chord_seconds=self.min_chord_spin.value(),
+            max_meter=self.max_meter_spin.value(),
             tuning_correction=self.tuning_chk.isChecked(),
             use_cache=self.cache_chk.isChecked(),
             save_chart=self.chart_chk.isChecked(),
